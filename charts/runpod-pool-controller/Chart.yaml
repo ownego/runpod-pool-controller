@@ -7,7 +7,8 @@ appVersion: "0.4.0"
 home: https://github.com/ownego/runpod-pool-controller
 sources:
   - https://github.com/ownego/runpod-pool-controller
-license: MIT
+annotations:
+  artifacthub.io/license: MIT
 keywords: [runpod, gpu, nginx, controller]
 maintainers:
   - name: Ownego
