@@ -5,6 +5,12 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
+# Name of the Deployment, Service, ServiceAccount and Role. Default
+# "<release>-runpod-pool-controller", or the release name if it already
+# contains "runpod-pool-controller". The Service name is part of the
+# /sd/<pool> URL your Prometheus scrape config points at.
+fullnameOverride: ""
+
 # RunPod API key. A Read Only key is enough while every pool is Observe or
 # DryRun; Manage mode needs an All key (RunPod has no pods-only scope).
 runpodApiKey:
@@ -68,6 +74,9 @@ pools: []
 #      envFromSecret: inference-env
 #      metricsTokenKey: METRICS_TOKEN
 
+# On the Deployment, e.g. reloader.stakater.com/auto: "true" to restart the
+# controller when the API key Secret changes.
+annotations: {}
 podAnnotations: {}
 podLabels: {}
 podSecurityContext:
