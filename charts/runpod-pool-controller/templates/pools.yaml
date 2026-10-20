@@ -1,0 +1,12 @@
+{{- range .Values.pools }}
+---
+apiVersion: {{ include "rpp.crdGroup" $ }}/v1alpha1
+kind: RunPodPool
+metadata:
+  name: {{ .name }}
+  namespace: {{ include "rpp.watchNamespace" $ }}
+  labels:
+    {{- include "rpp.labels" $ | nindent 4 }}
+spec:
+  {{- toYaml .spec | nindent 2 }}
+{{- end }}

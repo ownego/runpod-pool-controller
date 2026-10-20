@@ -1,0 +1,19 @@
+# Rendered by CI (helm lint / template): a pool with every optional part on.
+prometheusUrl: http://prometheus-operated.monitoring.svc:9090
+serviceMonitor:
+  enabled: true
+rbac:
+  configMaps: [other-pool-nginx-slots]
+pools:
+  - name: inference
+    spec:
+      dryRun: true
+      templateId: abcd1234ef
+      image: yourorg/your-inference-image:1.0.0
+      gpuTypes: [NVIDIA GeForce RTX 4090]
+      replicas: {min: 2, max: 2}
+      datacenters: {allow: [US-NC-1, US-TX-3]}
+      limits: {maxPods: 4, maxHourlyCostUsd: 3.6, estimatedPodCostUsd: 0.89}
+      nginx: {basePort: 9001}
+      envFromSecret: inference-env
+      metricsTokenKey: METRICS_TOKEN

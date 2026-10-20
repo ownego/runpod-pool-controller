@@ -1,0 +1,30 @@
+name: release-chart
+
+# Push a tag like chart-v0.1.0 to publish the chart to
+# oci://ghcr.io/ownego/charts/runpod-pool-controller:0.1.0.
+# GHCR, not Docker Hub: there the chart would share the image's repository
+# (ownego/runpod-pool-controller) and its version tags.
+on:
+  push:
+    tags: ["chart-v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Tag matches Chart.yaml version
+        run: |
+          version=$(sed -n 's/^version: //p' charts/runpod-pool-controller/Chart.yaml)
+          test "chart-v$version" = "$GITHUB_REF_NAME"
+      - run: helm lint charts/runpod-pool-controller
+      - run: helm package charts/runpod-pool-controller
+      - name: Push
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push runpod-pool-controller-*.tgz oci://ghcr.io/ownego/charts

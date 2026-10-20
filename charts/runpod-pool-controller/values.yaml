@@ -1,0 +1,94 @@
+image:
+  repository: ownego/runpod-pool-controller
+  # Default: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# RunPod API key. A Read Only key is enough while every pool is Observe or
+# DryRun; Manage mode needs an All key (RunPod has no pods-only scope).
+runpodApiKey:
+  # Use a Secret you created yourself (recommended):
+  #   kubectl create secret generic runpod-pool-controller --from-literal=RUNPOD_API_KEY=<key>
+  existingSecret: runpod-pool-controller
+  key: RUNPOD_API_KEY
+  # Or let the chart create the Secret from this value (it then lives in
+  # your Helm values and release history).
+  value: ""
+
+# Namespace whose RunPodPools the controller manages. Default: the release
+# namespace. The Role is created there.
+watchNamespace: ""
+# API group of the RunPodPool CRD. Default runpodpool.ownego.com, the group
+# of crds/. Set it only if your cluster installed the CRD under another one.
+crdGroup: ""
+# Without it the RelativeLatency and ErrorRate rules are off.
+prometheusUrl: ""
+# Seconds between reconcile loops (default 30).
+reconcileInterval: 30
+logLevel: INFO
+
+rbac:
+  create: true
+  # Extra ConfigMaps (get, patch) and Secrets (get) the controller may read,
+  # for pools not listed under `pools` below. Each pool needs its
+  # nginx.slotsConfigMap and its envFromSecret here.
+  configMaps: []
+  secrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  port: 8080
+
+serviceMonitor:
+  # For the Prometheus Operator: scrape the controller's runpod_pool_* metrics.
+  enabled: false
+  labels: {}
+  interval: 30s
+
+# RunPodPools to create with the release. Each entry is a name and a spec
+# (see examples/pool.yaml in the repo for every field). By default the
+# chart also creates the pool's slots ConfigMap once, empty, and never
+# overwrites it afterwards: the controller owns its content.
+pools: []
+#  - name: inference
+#    createSlotsConfigMap: true
+#    spec:
+#      dryRun: true
+#      templateId: abcd1234ef
+#      image: yourorg/your-inference-image:1.0.0
+#      gpuTypes: [NVIDIA GeForce RTX 4090]
+#      replicas: {min: 2, max: 2}
+#      datacenters: {allow: [US-NC-1, US-TX-3]}
+#      limits: {maxPods: 4, maxHourlyCostUsd: 3.60, estimatedPodCostUsd: 0.89}
+#      envFromSecret: inference-env
+#      metricsTokenKey: METRICS_TOKEN
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+# Average CPU is a few millicores, but each loop opens several TLS
+# connections at once; a tight CPU limit throttles that burst into probe
+# timeouts. Memory stays near 20Mi.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 64Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}

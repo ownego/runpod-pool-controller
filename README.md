@@ -61,7 +61,27 @@ pods serve.
 - Optional: Prometheus, for the latency and error-rate rules and for
   per-pod scraping.
 
-## Install
+## Install with Helm
+
+```bash
+kubectl create namespace runpod
+kubectl -n runpod create secret generic runpod-pool-controller \
+  --from-literal=RUNPOD_API_KEY=<key>
+
+helm install rpp oci://ghcr.io/ownego/charts/runpod-pool-controller \
+  -n runpod --version 0.1.0 \
+  --set prometheusUrl=http://prometheus-operated.monitoring.svc:9090
+```
+
+The chart installs the CRD (from `crds/`, so on first install only, as Helm
+does with CRDs), the controller, its RBAC and Service, and optionally a
+ServiceMonitor and your pools. A pool under `pools:` in your values gets its
+RunPodPool, RBAC for its slots ConfigMap and `envFromSecret`, and the slots
+ConfigMap itself, created once, empty, and never overwritten by later
+upgrades (the controller owns it). The nginx proxy is yours to deploy; see
+`examples/nginx.yaml`. All values: [`charts/runpod-pool-controller/values.yaml`](charts/runpod-pool-controller/values.yaml).
+
+## Install with plain manifests
 
 The manifests use namespace `runpod` and a pool named `inference`. Rename
 both to suit; the names must agree across files.
@@ -256,7 +276,9 @@ docker build -t runpod-pool-controller .
 ```
 
 Releases: a `v*` tag builds and pushes `ownego/runpod-pool-controller:<version>`
-and `:latest` (see `.github/workflows/release.yml`).
+and `:latest` to Docker Hub (`.github/workflows/release.yml`); a `chart-v*`
+tag pushes the chart to `oci://ghcr.io/ownego/charts`
+(`.github/workflows/release-chart.yml`).
 
 ## License
 
