@@ -11,8 +11,11 @@ across the pods. The controller:
   slower than its peers, 5xx rate, RunPod machine notices);
 - **replaces a bad pod surge-first**: it creates the replacement, wires it
   in, and only then drains and terminates the old pod;
-- **keeps `replicas.min` pods**, and spreads them across datacenters and
-  GPU types;
+- **keeps `replicas.min` pods**, or **autoscales** between `min` and `max`
+  on one Prometheus value (queue length, latency...), and spreads pods
+  across datacenters and GPU types;
+- **tells you when RunPod has no GPU** for a pod it needs
+  (`CapacityUnavailable`), so a human can act before users notice;
 - **rolls a new image in place**, one pod at a time, keeping each pod's GPU,
   so an upgrade needs no free stock;
 - **rewrites the nginx slots** as pods come and go, and serves Prometheus
@@ -69,7 +72,7 @@ kubectl -n runpod create secret generic runpod-pool-controller \
   --from-literal=RUNPOD_API_KEY=<key>
 
 helm install rpp oci://ghcr.io/ownego/charts/runpod-pool-controller \
-  -n runpod --version 0.1.1 \
+  -n runpod --version 0.2.0 \
   --set prometheusUrl=http://prometheus-operated.monitoring.svc:9090
 ```
 
@@ -142,7 +145,8 @@ Each loop (30s by default):
    replacement is wired, then is unwired into Draining. An `Unreachable`
    pod is unwired at once, since nginx is already skipping it, unless it is
    the last wired pod.
-4. **Capacity below `replicas.min`** triggers one create per loop. RunPod
+4. **Capacity below the wanted size** (`replicas.min`, or the autoscaler's
+   size) triggers one create per loop. RunPod
    is offered the allowed datacenters that have no pool pod yet, in
    `datacenters.allow` order, and the `gpuTypes` in order, and takes the
    first combination with stock.
@@ -160,6 +164,19 @@ Each loop (30s by default):
    own metrics (the earliest Prometheus `*_created` sample is the process
    start time), because RunPod's `lastStartedAt` does not change on a reset.
 
+7. **Autoscaling** (`spec.autoscaling`, off by default). Each loop the
+   pool's query gives one value, e.g. the average queue per pod. The
+   recommended size is `ceil(ready pods x value / target)`, clamped to
+   `[min, max]` and left alone within 10% of the target, as an HPA does.
+   The pool grows only when every recommendation over
+   `scaleUpStabilization` (2m) is higher, to the lowest of them; a new pod
+   takes minutes to start, so a spike shorter than that is not worth one.
+   It shrinks to the highest recommendation over `scaleDownStabilization`
+   (30m), one pod at a time through the drain. Without a value (no
+   Prometheus, no data) the size stays put (`AutoscalingMetricUnavailable`).
+   The size and the recommendations behind it are in `status.autoscaling`
+   and `runpod_pool_desired`.
+
 Safeguards:
 
 - **Ownership.** The controller only touches pods named with `namePrefix`
@@ -169,6 +186,12 @@ Safeguards:
   `limits.maxCreatesPerHour` block creates and raise a condition. Creates
   RunPod refuses outright (no stock, 4xx) do not count toward the hourly
   cap; timeouts do, since they may have made a pod.
+- **No GPU available.** When the pool needs more pods (to replace one, to
+  reach `min`, or to scale out) and RunPod refused the last create for lack
+  of stock, the pool raises `CapacityUnavailable`, with the GPU types,
+  cloud and datacenters it tried, until a create succeeds. Alert on it:
+  waiting for stock can take hours, and widening `gpuTypes`,
+  `datacenters.allow` or `cloud` is a human decision.
 - **Backoff.** A failed create waits 5 minutes. A failed in-place update
   rewires the pod on its old image and waits 30 minutes.
 - **Shared problems.** If every Ready pod is degraded at once, the cause is
@@ -211,6 +234,8 @@ write them in the pool. Each must return one series per pod, labelled
 | `namePrefix` | `rpp-<pool>-` | pods with this prefix are owned |
 | `adopt` | `[]` | existing pod IDs to take over |
 | `replicas.min`, `.max` | `1`, `min` | |
+| `autoscaling.enabled`, `.query`, `.target` | off, none, `1` | |
+| `autoscaling.scaleUpStabilization`, `.scaleDownStabilization` | `2m`, `30m` | |
 | `datacenters.allow`, `.deny` | none, none | `allow` is required to create, and is the preference order |
 | `maxPerDatacenter` | `1` | |
 | `limits.maxPods` | `2 x min` | |
@@ -254,6 +279,8 @@ write them in the pool. Each must return one series per pod, labelled
   max by (pool) (runpod_pool_desired_min) - max by (pool) (runpod_pool_ready) > 0
   # RunPod flagged a pool pod's machine
   max by (pool) (runpod_pool_condition{type="HostNotice"}) > 0
+  # the pool needs a pod and RunPod has no GPU for it: act now
+  max by (pool) (runpod_pool_condition{type="CapacityUnavailable"}) > 0
   ```
 
 - `/sd/<pool>` is a Prometheus HTTP SD feed: one target per slot, with

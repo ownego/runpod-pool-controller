@@ -30,6 +30,11 @@ class Prometheus:
                 out.append((sample["metric"], value))
         return out
 
+    def scalar(self, expr):
+        """The query's single value; the highest one if it returns several, None if none."""
+        values = [v for _, v in self.query(expr)]
+        return max(values) if values else None
+
     def per_pod(self, expr, label="runpod_pod"):
         return {labels[label]: value for labels, value in self.query(expr) if label in labels}
 

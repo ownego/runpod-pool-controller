@@ -42,6 +42,8 @@ HELP = {
     "runpod_pool_would_replace": ("gauge", "1 if Manage mode would replace this member; reason is the first sustained rule."),
     "runpod_pool_ready": ("gauge", "Ready members that are reachable and breach no rule."),
     "runpod_pool_desired_min": ("gauge", "spec.replicas.min."),
+    "runpod_pool_desired": ("gauge", "Pods the pool should run: the autoscaler's size, else spec.replicas.min."),
+    "runpod_pool_autoscaling_value": ("gauge", "Last value of spec.autoscaling.query."),
     "runpod_pool_hourly_cost_usd": ("gauge", "Sum of costPerHr of the pool's RunPod pods."),
     "runpod_pool_condition": ("gauge", "1 while the pool has this status condition."),
     "runpod_pool_last_reconcile_timestamp_seconds": ("gauge", "Unix time of the last completed reconcile loop."),
@@ -76,6 +78,10 @@ def render(snapshots, counters, last_reconcile):
         if snap.last_warmup_seconds is not None:
             samples["runpod_pool_last_warmup_seconds"].append((pool, snap.last_warmup_seconds))
         samples["runpod_pool_desired_min"].append((pool, snap.spec.settings.replicas_min))
+        auto = snap.autoscaling or {}
+        samples["runpod_pool_desired"].append((pool, auto.get("desired", snap.spec.settings.replicas_min)))
+        if auto.get("value") is not None:
+            samples["runpod_pool_autoscaling_value"].append((pool, auto["value"]))
         samples["runpod_pool_hourly_cost_usd"].append((pool, snap.hourly_cost))
         for ctype, _ in snap.conditions:
             samples["runpod_pool_condition"].append(({**pool, "type": ctype}, 1))

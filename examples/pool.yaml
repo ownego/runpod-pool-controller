@@ -29,7 +29,17 @@ spec:
 
   replicas:
     min: 2
-    max: 2
+    max: 3
+
+  # Optional: size the pool between min and max from one Prometheus value,
+  # like an HPA. Here: average inference queue per pod, aiming at 3.
+  # limits.maxPods and maxHourlyCostUsd must leave room for max + 1 surge.
+  autoscaling:
+    enabled: true
+    query: avg(avg_over_time(queue_size{job="$job"}[2m]))
+    target: 3
+    scaleUpStabilization: 2m     # sustained this long before adding a pod
+    scaleDownStabilization: 30m  # highest recommendation over this long
 
   datacenters:
     allow: [US-NC-1, US-TX-3, US-IL-1]  # preference order for new pods
@@ -37,8 +47,8 @@ spec:
   maxPerDatacenter: 1  # default 1: spread pods across DCs while one is free
 
   limits:
-    maxPods: 4              # 2 serving + 1 replacement + 1 draining
-    maxHourlyCostUsd: 3.60  # default 0 = never create
+    maxPods: 5              # 3 serving + 1 replacement + 1 draining
+    maxHourlyCostUsd: 4.50  # default 0 = never create
     maxCreatesPerHour: 3    # default 3: stops a crash-looping image
     estimatedPodCostUsd: 0.89  # price of the dearest GPU in gpuTypes
 

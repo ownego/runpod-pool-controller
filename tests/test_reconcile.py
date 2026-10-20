@@ -116,8 +116,13 @@ class FakeRunPod:
 
 
 class FakeProm:
-    def __init__(self, avg=None, err=None, fail=False):
-        self.avg, self.err, self.fail = avg or {}, err or {}, fail
+    def __init__(self, avg=None, err=None, fail=False, value=None):
+        self.avg, self.err, self.fail, self.value = avg or {}, err or {}, fail, value
+
+    def scalar(self, expr):
+        if self.fail:
+            raise RuntimeError("prometheus down")
+        return self.value
 
     def per_pod(self, expr):
         if self.fail:
@@ -642,3 +647,61 @@ def test_kube_client_uses_the_configured_group():
     assert KubeClient("https://k", "t")._pools_path("ns").startswith("/apis/runpodpool.ownego.com/")
     assert KubeClient("https://k", "t", group="runpod.example.com")._pools_path("ns") == \
         "/apis/runpod.example.com/v1alpha1/namespaces/ns/runpodpools"
+
+
+# ------------------------------------------------------------ autoscaling
+
+def scaling(**auto):
+    return pool(templateId="tpl", dryRun=False, replicas={"min": 2, "max": 3},
+                limits={"maxPods": 5, "maxHourlyCostUsd": 5.0, "estimatedPodCostUsd": 0.74},
+                datacenters={"allow": ["EU-RO-1", "EUR-IS-2", "US-NC-1"]},
+                autoscaling={"enabled": True, "query": "avg(queue{job=\"$job\"})", "target": 3,
+                             "scaleUpStabilization": "2m", "scaleDownStabilization": "10m", **auto})
+
+
+def test_sustained_load_scales_out_then_back_in():
+    prom = FakeProm(value=6)  # 2 pods x 6/3 -> 4, clamped to max 3
+    rec, kube, runpod, clock, _ = make(pools=[scaling()], pods=[old_pod(A), old_pod(B, dc="EU-RO-1")], prom=prom)
+    run(rec, clock, 4)  # 2 min of high load
+    assert runpod.created == []  # not before the 2 min window is covered
+    run(rec, clock, 2)
+    assert len(runpod.created) == 1
+    status = kube.patched["remove-bg"]
+    assert status["autoscaling"]["desired"] == 3
+    run(rec, clock, 4)  # the new pod passes 3 probes and is wired
+    assert len(wired(kube)) == 3
+    prom.value = 0.5
+    run(rec, clock, 18)  # under 10 min: still 3
+    assert runpod.deleted == [] and len(wired(kube)) == 3
+    run(rec, clock, 6)
+    assert len(wired(kube)) == 2  # one ScaleIn unwire
+    run(rec, clock, 6)
+    assert len(runpod.deleted) == 1  # ...drained, then terminated
+    assert kube.patched["remove-bg"]["autoscaling"]["desired"] == 2
+
+
+def test_missing_metric_keeps_the_size():
+    rec, kube, runpod, clock, _ = make(pools=[scaling()], pods=[old_pod(A), old_pod(B, dc="EU-RO-1")],
+                                       prom=FakeProm(fail=True))
+    run(rec, clock, 10)
+    status = kube.patched["remove-bg"]
+    assert status["autoscaling"]["desired"] == 2 and runpod.created == []
+    assert "AutoscalingMetricUnavailable" in {c["type"] for c in status["conditions"]}
+
+
+def test_no_stock_raises_capacity_unavailable_until_a_create_succeeds():
+    rec, kube, runpod, clock, _ = make(pools=[managed()], pods=[old_pod(A)])
+    real_create = runpod.create_pod
+
+    def no_stock(**kw):
+        raise HttpError(500, NO_STOCK)
+    runpod.create_pod = no_stock
+    run(rec, clock, 1)
+    conds = {c["type"]: c["message"] for c in kube.patched["remove-bg"]["conditions"]}
+    assert "CapacityUnavailable" in conds and "no instances" in conds["CapacityUnavailable"]
+    run(rec, clock, 3)  # backing off: still reported
+    assert "CapacityUnavailable" in {c["type"] for c in kube.patched["remove-bg"]["conditions"]}
+    runpod.create_pod = real_create
+    run(rec, clock, 8)  # next try succeeds
+    assert len(runpod.created) == 1
+    assert "CapacityUnavailable" not in {c["type"] for c in kube.patched["remove-bg"]["conditions"]}

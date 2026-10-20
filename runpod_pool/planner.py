@@ -48,6 +48,9 @@ class Settings:
     datacenters_deny: list
     max_per_datacenter: int
     est_pod_cost: float  # used for the cost cap before a pod's real price is known
+    # Pods to run, from the autoscaler (within replicas.min..max). None
+    # without autoscaling: then at least replicas.min, at most replicas.max.
+    desired: int | None = None
 
 
 @dataclass
@@ -72,6 +75,9 @@ class History:
     creates: list = field(default_factory=list)
     replacements: list = field(default_factory=list)  # {"ts", "datacenter", "reason", "podId"}
     last_create_failure: float | None = None
+    # Error of the last create RunPod refused (no stock, 4xx); None once a
+    # create succeeds. Drives the CapacityUnavailable condition.
+    last_create_rejected: str | None = None
     last_update_failure: float | None = None
     # pod ids this pool terminated itself; an adopted id in here is retired,
     # not "Missing" (spec.adopt is not edited by the controller)
@@ -90,6 +96,7 @@ class Plan:
     terminate: list = field(default_factory=list)  # (pod_id, reason)
     update: list = field(default_factory=list)  # drained pod ids to update to spec.image in place
     create: dict | None = None  # {"reason", "datacenters"}
+    need: int = 0  # pods missing, whether or not a create could be planned
     conditions: list = field(default_factory=list)  # (type, message)
     # (pod_id, datacenter, reason) of members unwired for a health reason;
     # recorded in history (DC cooldown) once the unwire is applied
@@ -180,9 +187,11 @@ def plan(settings, members, verdict, history, now):
             p.unwire.append((m.pod_id, m.would_replace))
             p.replacing.append((m.pod_id, m.datacenter, m.would_replace))
 
-    # 4. Scale in: more healthy members than replicas.max (and nothing flagged).
+    # 4. Scale in: more healthy members than wanted (and nothing flagged),
+    #    one per loop; the drain takes care of in-flight requests.
+    most = settings.desired if settings.desired is not None else settings.replicas_max
     if not flagged:
-        extra = len(healthy) + len(promoted) - settings.replicas_max
+        extra = min(1, len(healthy) + len(promoted) - most)
         for m in sorted(healthy, key=lambda m: m.created_at)[:max(0, extra)]:
             p.unwire.append((m.pod_id, "ScaleIn"))
 
@@ -194,11 +203,16 @@ def plan(settings, members, verdict, history, now):
     updating = [m for m in draining if m.updating]
     capacity = len(healthy) + len(promoted) + len(still_warming) + len(updating)
     waiting = [m for m in flagged if m.pod_id not in {u for u, _ in p.unwire}]
-    need = max(settings.replicas_min - capacity, 0)
+    least = settings.desired if settings.desired is not None else settings.replicas_min
+    need = max(least - capacity, 0)
     if waiting and not still_warming:
         need = max(need, 1)
+    p.need = need
     if need:
-        reason = f"Replace {waiting[0].pod_id} ({waiting[0].would_replace})" if waiting else "BelowMin"
+        if waiting:
+            reason = f"Replace {waiting[0].pod_id} ({waiting[0].would_replace})"
+        else:
+            reason = "BelowMin" if capacity < settings.replicas_min else "ScaleOut"
         blocked = _create_blocked(settings, members, history, now)
         if blocked:
             p.conditions.append(blocked)
