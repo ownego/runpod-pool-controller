@@ -161,6 +161,10 @@ spec:
                     basePort:
                       description: Listen port of the first slot server block. Default 8081.
                       type: integer
+                    slotPorts:
+                      description: Slot ports nginx listens on, from basePort up. Must cover replicas.max plus one surge replacement. Default 4.
+                      type: integer
+                      minimum: 1
                     slotsConfigMap:
                       description: Controller-owned ConfigMap nginx includes. Default "<pool name>-nginx-slots".
                       type: string
