@@ -1,0 +1,54 @@
+{{- if .Values.rbac.create }}
+{{- $configMaps := list }}
+{{- $secrets := list }}
+{{- range .Values.pools }}
+{{- $configMaps = append $configMaps (include "rpp.slotsConfigMap" .) }}
+{{- with .spec.envFromSecret }}{{ $secrets = append $secrets . }}{{ end }}
+{{- end }}
+{{- $configMaps = concat $configMaps .Values.rbac.configMaps | uniq }}
+{{- $secrets = concat $secrets .Values.rbac.secrets | uniq }}
+# Reads the pools and the ConfigMaps/Secrets they name; writes pool status
+# and the slots ConfigMaps. Nothing cluster-scoped, no create/delete.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rpp.fullname" . }}
+  namespace: {{ include "rpp.watchNamespace" . }}
+  labels:
+    {{- include "rpp.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [{{ include "rpp.crdGroup" . | quote }}]
+    resources: ["runpodpools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [{{ include "rpp.crdGroup" . | quote }}]
+    resources: ["runpodpools/status"]
+    verbs: ["get", "patch", "update"]
+  {{- if $configMaps }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: {{ toJson $configMaps }}
+    verbs: ["get", "patch"]
+  {{- end }}
+  {{- if $secrets }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: {{ toJson $secrets }}
+    verbs: ["get"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rpp.fullname" . }}
+  namespace: {{ include "rpp.watchNamespace" . }}
+  labels:
+    {{- include "rpp.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rpp.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rpp.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -18,3 +18,36 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint
+        run: |
+          helm lint charts/runpod-pool-controller
+          helm lint charts/runpod-pool-controller -f charts/runpod-pool-controller/ci/pools-values.yaml
+      - name: Render
+        run: |
+          mkdir -p out
+          helm template rpp charts/runpod-pool-controller -n runpod --include-crds > out/default.yaml
+          helm template rpp charts/runpod-pool-controller -n runpod --include-crds \
+            -f charts/runpod-pool-controller/ci/pools-values.yaml > out/pools.yaml
+          helm template rpp charts/runpod-pool-controller -n runpod \
+            --set runpodApiKey.value=dummy --set watchNamespace=gpu > out/inline-key.yaml
+      - name: Check rendered output
+        run: |
+          # The pool's slots ConfigMap, Role names and API group as expected.
+          grep -q 'name: inference-nginx-slots' out/pools.yaml
+          grep -q 'server 127.0.0.1:9001 down;' out/pools.yaml
+          grep -q 'helm.sh/resource-policy: keep' out/pools.yaml
+          grep -q '"inference-nginx-slots","other-pool-nginx-slots"' out/pools.yaml
+          grep -q '\["inference-env"\]' out/pools.yaml
+          grep -q 'apiVersion: runpodpool.ownego.com/v1alpha1' out/pools.yaml
+          grep -q 'kind: Secret' out/inline-key.yaml
+          grep -q 'namespace: gpu' out/inline-key.yaml
+      - name: Validate against Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary -ignore-missing-schemas out/*.yaml

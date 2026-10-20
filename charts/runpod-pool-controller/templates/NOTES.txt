@@ -1,0 +1,12 @@
+runpod-pool-controller {{ .Chart.AppVersion }} watches RunPodPools in namespace {{ include "rpp.watchNamespace" . }}.
+
+  kubectl -n {{ include "rpp.watchNamespace" . }} get rpp -o wide
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "rpp.fullname" . }}
+
+Pools start in DryRun unless their spec says dryRun: false. The RunPod API key
+comes from Secret {{ include "rpp.apiKeySecret" . }} (key {{ .Values.runpodApiKey.key }}).
+{{- if and (not .Values.runpodApiKey.value) .Values.runpodApiKey.existingSecret }}
+Create it if you have not:
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.runpodApiKey.existingSecret }} --from-literal={{ .Values.runpodApiKey.key }}=<key>
+{{- end }}
+Each pool also needs its nginx proxy; see examples/nginx.yaml in the repo.

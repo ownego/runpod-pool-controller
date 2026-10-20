@@ -1,0 +1,15 @@
+# /metrics (runpod_pool_*), /healthz and /sd/<pool> (Prometheus HTTP SD).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rpp.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rpp.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "rpp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
