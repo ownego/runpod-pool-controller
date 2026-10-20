@@ -1,0 +1,208 @@
+# RunPodPool: desired state of a set of RunPod GPU pods behind an nginx proxy.
+# See README.md for every field and its default.
+#
+# Modes: Observe (spec.paused, or no templateId) reports only; DryRun
+# (spec.dryRun, default true) also plans and reports the plan; Manage
+# (dryRun: false) creates/terminates RunPod pods and rewrites the nginx slots.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: runpodpools.runpodpool.ownego.com
+spec:
+  group: runpodpool.ownego.com
+  scope: Namespaced
+  names:
+    kind: RunPodPool
+    plural: runpodpools
+    singular: runpodpool
+    shortNames: [rpp]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Mode
+          type: string
+          jsonPath: .status.mode
+        - name: Planned
+          type: string
+          jsonPath: .status.plannedActions
+          priority: 1
+        - name: Ready
+          type: integer
+          jsonPath: .status.ready
+          description: Ready members that are reachable and breach no health rule
+        - name: Desired
+          type: integer
+          jsonPath: .status.desired
+        - name: Cost/h
+          type: number
+          jsonPath: .status.hourlyCostUsd
+        - name: Last-Reconcile
+          type: date
+          jsonPath: .status.lastReconcileTime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                paused:
+                  description: Observe only; no RunPod or nginx changes. Kill switch.
+                  type: boolean
+                dryRun:
+                  description: Plan and report, change nothing. Default true; set false for Manage mode.
+                  type: boolean
+                templateId:
+                  description: RunPod pod template new pods are created from. Without it the pool is Observe-only.
+                  type: string
+                image:
+                  description: Overrides the template's image; changing it updates Ready members in place, one at a time.
+                  type: string
+                gpuTypes:
+                  description: RunPod GPU type ids, tried in order. Default ["NVIDIA GeForce RTX 4090"].
+                  type: array
+                  items: {type: string}
+                cloud:
+                  type: string
+                  enum: [SECURE, COMMUNITY]
+                datacenters:
+                  type: object
+                  properties:
+                    allow:
+                      description: Datacenters new pods may use, in preference order.
+                      type: array
+                      items: {type: string}
+                    deny:
+                      type: array
+                      items: {type: string}
+                maxPerDatacenter:
+                  description: Spread rule for new pods. Default 1.
+                  type: integer
+                  minimum: 1
+                limits:
+                  description: Hard caps checked before every create.
+                  type: object
+                  properties:
+                    maxPods:
+                      description: Warming + Ready + Draining pods. Default 2x replicas.min.
+                      type: integer
+                    maxHourlyCostUsd:
+                      description: Sum of the pool's pod prices plus the next pod. Default 0 = never create.
+                      type: number
+                    maxCreatesPerHour:
+                      description: Default 3. Hitting it stops creates until a human looks.
+                      type: integer
+                    estimatedPodCostUsd:
+                      description: Price assumed for a pod not created yet (cost cap check). Default 1.0.
+                      type: number
+                drain:
+                  type: object
+                  properties:
+                    period:
+                      description: How long an unwired member keeps running before termination. Default 150s.
+                      type: string
+                adopt:
+                  description: >-
+                    Existing RunPod pod IDs the pool takes ownership of. Pods
+                    the pool creates itself are owned by name prefix.
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^[a-z0-9]{14}$'
+                namePrefix:
+                  description: Pods named with this prefix are owned. Default "rpp-<pool name>-".
+                  type: string
+                replicas:
+                  type: object
+                  properties:
+                    min:
+                      type: integer
+                      minimum: 1
+                    max:
+                      type: integer
+                      minimum: 1
+                nginx:
+                  type: object
+                  properties:
+                    configMap:
+                      description: ConfigMap holding the proxy config. Default "<pool name>-nginx-config".
+                      type: string
+                    configMapKey:
+                      type: string
+                    service:
+                      description: Service in front of the proxy; used for Prometheus SD targets. Default "<pool name>".
+                      type: string
+                    basePort:
+                      description: Listen port of the first slot server block. Default 8081.
+                      type: integer
+                    slotsConfigMap:
+                      description: Controller-owned ConfigMap nginx includes. Default "<pool name>-nginx-slots".
+                      type: string
+                    readTimeout:
+                      description: proxy_read_timeout of each slot. Default 120s.
+                      type: string
+                envFromSecret:
+                  description: Secret whose keys are sent as env to every pod created or updated, merged over the template's env. Default none.
+                  type: string
+                metricsTokenKey:
+                  description: Key in envFromSecret holding the token for the metrics path. Default none (no token).
+                  type: string
+                port:
+                  description: The pods' HTTP port, reached as <pod>-<port>.proxy.runpod.net. Default 80.
+                  type: integer
+                probe:
+                  type: object
+                  properties:
+                    healthPath:
+                      description: Must answer 200. Default /health.
+                      type: string
+                    metricsPath:
+                      description: Probed for latency, and for the process start (*_created samples). Default /metrics.
+                      type: string
+                    tokenParam:
+                      description: Query parameter carrying the metrics token. Default token.
+                      type: string
+                    requireMetric:
+                      description: A metric name the metrics body must contain. Default none.
+                      type: string
+                prometheus:
+                  type: object
+                  properties:
+                    job:
+                      description: Prometheus job scraping the pods. Default "<pool name>-pods".
+                      type: string
+                    latencyQuery:
+                      description: PromQL, one series per pod labelled runpod_pod, average request seconds; $job is replaced. Default none (RelativeLatency off).
+                      type: string
+                    errorRatioQuery:
+                      description: PromQL, one series per pod labelled runpod_pod, share of 5xx; $job is replaced. Default none (ErrorRate off).
+                      type: string
+                health:
+                  type: object
+                  properties:
+                    warmupTimeout:
+                      description: A new pod must pass 3 probes in a row within this. Default 15m.
+                      type: string
+                    replaceWhen:
+                      type: object
+                      properties:
+                        unreachableFor: {type: string}
+                        slowScrapeAbove: {type: string}
+                        slowScrapeFor: {type: string}
+                        relativeLatencyAbove: {type: number}
+                        relativeLatencyFor: {type: string}
+                        errorRateAbove: {type: number}
+                        errorRateFor: {type: string}
+                        hostNotice:
+                          description: Replace a member whose RunPod host has a note or maintenance window. Default false.
+                          type: boolean
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true

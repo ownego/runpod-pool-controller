@@ -1,0 +1,20 @@
+# Optional, for the Prometheus Operator: scrape each pod's metrics through
+# the proxy's slot ports, with targets (and runpod_pod/slot/datacenter
+# labels) from the controller's /sd/<pool> feed. The latency and error-rate
+# rules need this job.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  namespace: runpod
+  name: inference-pods
+spec:
+  jobName: inference-pods  # = spec.prometheus.job of the pool
+  scrapeInterval: 30s
+  scrapeTimeout: 10s
+  metricsPath: /metrics
+  # If the metrics path takes a token (spec.metricsTokenKey):
+  # params:
+  #   token: ["<the token>"]
+  httpSDConfigs:
+    - url: http://runpod-pool-controller.runpod.svc:8080/sd/inference
+      refreshInterval: 30s

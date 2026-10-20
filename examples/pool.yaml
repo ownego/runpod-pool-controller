@@ -1,0 +1,95 @@
+# A pool of 2 GPU pods running one HTTP inference service, behind the nginx
+# proxy in nginx.yaml. Starts in DryRun: it plans and reports, changes
+# nothing. Set dryRun: false once the plans look right (and the controller
+# has an All RunPod key).
+apiVersion: runpodpool.ownego.com/v1alpha1
+kind: RunPodPool
+metadata:
+  namespace: runpod
+  name: inference
+spec:
+  paused: false   # kill switch: true = observe only
+  dryRun: true    # default true
+
+  # RunPod pod template to create pods from; image overrides its image.
+  # Changing image later rolls running pods onto it in place, one at a time.
+  templateId: abcd1234ef
+  image: yourorg/your-inference-image:1.0.0
+  # Tried in order; the first with stock wins.
+  gpuTypes:
+    - NVIDIA GeForce RTX 4090
+    - NVIDIA RTX A5000
+  cloud: SECURE
+
+  # Pods created by the pool are named, and owned, by this prefix
+  # (default "rpp-<pool name>-"). To take over pods you already run, list
+  # their IDs under adopt.
+  namePrefix: rpp-inference-
+  adopt: []
+
+  replicas:
+    min: 2
+    max: 2
+
+  datacenters:
+    allow: [US-NC-1, US-TX-3, US-IL-1]  # preference order for new pods
+    deny: []
+  maxPerDatacenter: 1  # default 1: spread pods across DCs while one is free
+
+  limits:
+    maxPods: 4              # 2 serving + 1 replacement + 1 draining
+    maxHourlyCostUsd: 3.60  # default 0 = never create
+    maxCreatesPerHour: 3    # default 3: stops a crash-looping image
+    estimatedPodCostUsd: 0.89  # price of the dearest GPU in gpuTypes
+
+  drain:
+    period: 150s  # above the proxy's read timeout, so in-flight requests end
+
+  nginx:
+    configMap: inference-nginx-config
+    slotsConfigMap: inference-nginx-slots
+    service: inference
+    basePort: 8081
+    readTimeout: 120s
+
+  # Every key of this Secret is sent as env to each pod created or updated
+  # (merged over the template's env). Optional.
+  envFromSecret: inference-env
+  # The key in that Secret holding the token the metrics path expects.
+  # Optional: leave it out if the metrics path takes no token.
+  metricsTokenKey: METRICS_TOKEN
+
+  # How the pods are probed (defaults shown).
+  port: 80
+  probe:
+    healthPath: /health
+    metricsPath: /metrics
+    tokenParam: token
+    requireMetric: ""   # e.g. a metric only your app exposes
+
+  prometheus:
+    job: inference-pods  # the job in scrapeconfig.yaml
+    # Per-pod PromQL (label runpod_pod) for the RelativeLatency and
+    # ErrorRate rules, from your app's metrics; $job is replaced. Leave out
+    # to turn those rules off. Example for a histogram request_seconds and
+    # a counter requests_total{status=...}:
+    latencyQuery: >-
+      sum by (runpod_pod) (rate(request_seconds_sum{job="$job"}[10m]))
+      / sum by (runpod_pod) (rate(request_seconds_count{job="$job"}[10m]))
+    errorRatioQuery: >-
+      sum by (runpod_pod) (rate(requests_total{job="$job", status=~"5.."}[5m]))
+      / sum by (runpod_pod) (rate(requests_total{job="$job"}[5m]))
+
+  health:
+    warmupTimeout: 15m  # a new pod must pass 3 probes in a row within this
+    replaceWhen:
+      unreachableFor: 2m
+      slowScrapeAbove: 2s
+      slowScrapeFor: 10m
+      relativeLatencyAbove: 4
+      relativeLatencyFor: 10m
+      errorRateAbove: 0.05
+      errorRateFor: 5m
+      # Replace a pod whose RunPod machine carries a note or maintenance
+      # window, e.g. "We have detected a critical error on this machine".
+      hostNotice: true

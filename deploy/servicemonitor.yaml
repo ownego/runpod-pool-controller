@@ -1,0 +1,15 @@
+# Optional, for the Prometheus Operator: scrape the controller's own
+# runpod_pool_* metrics. Set the label your Prometheus selects on.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  namespace: runpod
+  name: runpod-pool-controller
+spec:
+  selector:
+    matchLabels:
+      app: runpod-pool-controller
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

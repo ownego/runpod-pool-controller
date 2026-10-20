@@ -1,0 +1,113 @@
+# The proxy in front of the pool. Its static config holds no pod IDs: it
+# includes three files from the controller-owned slots ConfigMap
+# (inference-nginx-slots), one server block per pod on ports 8081-8084.
+#
+# RunPod's proxy routes on the Host header ({pod}-{port}.proxy.runpod.net),
+# so pods cannot share one nginx upstream (one Host per upstream). Each pod
+# gets a local "slot" server block that sets its Host, and :80 balances
+# across the slots.
+#
+# Needs something that restarts nginx when a ConfigMap changes; this uses
+# Stakater Reloader (reloader.stakater.com/auto).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: runpod
+  name: inference-nginx-config
+data:
+  default.conf: |
+    upstream inference_pods {
+      # Shared state, so least_conn and max_fails count across workers.
+      zone inference_pods 64k;
+      # Long GPU requests: send each to the slot with the fewest in flight.
+      least_conn;
+      include /etc/nginx/runpod-slots/upstream.conf;
+    }
+
+    server {
+      listen 80;
+
+      location / {
+        client_max_body_size 50m;
+        proxy_pass http://inference_pods;
+
+        # Retry on the other pod only for fast failures. RunPod's proxy
+        # answers 404 (empty body) for a pod whose container is not running,
+        # hence http_404. non_idempotent because inference calls are POSTs;
+        # only safe if they have no side effects.
+        proxy_next_upstream error http_502 http_503 http_429 http_404 non_idempotent;
+        proxy_next_upstream_tries 2;
+
+        # Above the slots' own read timeout (spec.nginx.readTimeout).
+        proxy_read_timeout 130s;
+      }
+
+      # Routes the proxy's own /metrics to one pod (the lowest slot).
+      include /etc/nginx/runpod-slots/metrics-pin.conf;
+    }
+
+    include /etc/nginx/runpod-slots/slots.conf;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: runpod
+  name: inference
+  annotations:
+    reloader.stakater.com/auto: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference
+  template:
+    metadata:
+      labels:
+        app: inference
+    spec:
+      # Each slot change restarts nginx; let in-flight requests finish
+      # (above proxy_read_timeout).
+      terminationGracePeriodSeconds: 150
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+            # One per slot; 4 = limits.maxPods.
+            - {name: slot-a, containerPort: 8081}
+            - {name: slot-b, containerPort: 8082}
+            - {name: slot-c, containerPort: 8083}
+            - {name: slot-d, containerPort: 8084}
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+            # A directory mount outside conf.d/, which nginx would include
+            # wholesale at http level.
+            - name: nginx-slots
+              mountPath: /etc/nginx/runpod-slots
+              readOnly: true
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: inference-nginx-config
+        - name: nginx-slots
+          configMap:
+            name: inference-nginx-slots
+---
+# Port 80 for clients; the slot ports so Prometheus can scrape each pod
+# separately through the proxy (scrapeconfig.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: runpod
+  name: inference
+spec:
+  selector:
+    app: inference
+  ports:
+    - {name: http, port: 80, targetPort: 80}
+    - {name: slot-a, port: 8081, targetPort: 8081}
+    - {name: slot-b, port: 8082, targetPort: 8082}
+    - {name: slot-c, port: 8083, targetPort: 8083}
+    - {name: slot-d, port: 8084, targetPort: 8084}

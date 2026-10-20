@@ -1,0 +1,51 @@
+# The controller reads its pools and the ConfigMaps/Secret they name, and
+# writes the pools' status and the controller-owned slots ConfigMap. Nothing
+# cluster-scoped, no create/delete of any Kubernetes object.
+#
+# Namespace "runpod" and the resource names below match examples/; change
+# them to your pool's. Each pool needs its slots ConfigMap (get, patch) and
+# its envFromSecret (get) listed here.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: runpod
+  name: runpod-pool-controller
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: runpod
+  name: runpod-pool-controller
+rules:
+  - apiGroups: ["runpodpool.ownego.com"]
+    resources: ["runpodpools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["runpodpool.ownego.com"]
+    resources: ["runpodpools/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    # The slots nginx includes. Created once from
+    # examples/slots-bootstrap.yaml, so the controller never needs `create`.
+    resourceNames: ["inference-nginx-slots"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    # spec.envFromSecret: env sent to every pod, and the metrics token. The
+    # RunPod API key is mounted as env, not read through the API.
+    resourceNames: ["inference-env"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: runpod
+  name: runpod-pool-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: runpod-pool-controller
+subjects:
+  - kind: ServiceAccount
+    namespace: runpod
+    name: runpod-pool-controller
