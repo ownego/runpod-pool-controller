@@ -205,3 +205,26 @@ def test_update_backs_off_after_a_failed_update():
     p = plan(settings(), members, verdict(), History(last_update_failure=NOW - 60), NOW)
     assert p.unwire == []
     assert "ImageUpdateBackoff" in {c for c, _ in p.conditions}
+
+
+# ------------------------------------------------------------ autoscaling
+
+def test_desired_above_min_creates_a_scale_out_pod():
+    p = plan(settings(replicas_max=4, desired=3), [m("a"), m("b", dc="EU-RO-1")], verdict(), History(), NOW)
+    assert p.create["reason"] == "ScaleOut" and p.need == 1
+
+
+def test_desired_below_current_scales_in_the_oldest_one_pod():
+    members = [m("a", age=9000), m("b", dc="EU-RO-1", age=5000), m("c", dc="US-TX-3", age=100)]
+    p = plan(settings(replicas_max=4, desired=2), members, verdict(), History(), NOW)
+    assert p.unwire == [("a", "ScaleIn")] and p.create is None and p.need == 0
+
+
+def test_without_autoscaling_need_follows_min():
+    p = plan(settings(), [m("a")], verdict(), History(), NOW)
+    assert p.create["reason"] == "BelowMin" and p.need == 1
+
+
+def test_need_is_reported_even_when_the_create_is_blocked():
+    p = plan(settings(), [m("a")], verdict(), History(last_create_failure=NOW - 10), NOW)
+    assert p.create is None and p.need == 1

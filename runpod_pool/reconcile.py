@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from . import health, nginx, planner, prom
+from .autoscale import Autoscaler, AutoscalingSpec, recommend
 from .http import HttpError
 from .planner import DRAINING, READY, WARMING
 from .probe import ProbeConfig, probe
@@ -99,6 +100,7 @@ class PoolSpec:
     latency_query: str
     error_ratio_query: str
     probe: ProbeConfig
+    autoscaling: AutoscalingSpec
     rules: health.Rules
     settings: planner.Settings
 
@@ -109,6 +111,7 @@ class PoolSpec:
         ng = spec.get("nginx") or {}
         pm = spec.get("prometheus") or {}
         pr = spec.get("probe") or {}
+        au = spec.get("autoscaling") or {}
         hc = (spec.get("health") or {}).get("replaceWhen") or {}
         d = health.Rules()
         rules = health.Rules(
@@ -174,6 +177,13 @@ class PoolSpec:
                 token_param=pr.get("tokenParam") or "token",
                 require_metric=pr.get("requireMetric") or "",
             ),
+            autoscaling=AutoscalingSpec(
+                enabled=bool(au.get("enabled", False)) and bool(au.get("query")),
+                query=au.get("query") or "",
+                target=float(au.get("target", 1.0)),
+                up_window=parse_duration(au.get("scaleUpStabilization", "2m")),
+                down_window=parse_duration(au.get("scaleDownStabilization", "30m")),
+            ),
             rules=rules,
             settings=settings,
         )
@@ -228,6 +238,7 @@ class PoolSnapshot:
     history: planner.History = field(default_factory=planner.History)
     prev_member_ids: frozenset = frozenset()
     gone_candidates: list = field(default_factory=list)  # slot pods missing from RunPod this loop
+    autoscaling: dict | None = None  # status.autoscaling: desired, value, recommendations
 
 
 class Reconciler:
@@ -367,6 +378,9 @@ class Reconciler:
         snap = PoolSnapshot(spec=spec, members=members, slots=dict(slots), conditions=conditions,
                             hourly_cost=0.0, ready_healthy=0, sd_targets=[], history=history,
                             prev_member_ids=frozenset(prev_members))
+        if spec.autoscaling.enabled:
+            snap.autoscaling = self._autoscale(spec, ready, prev_status.get("autoscaling") or {}, conditions, now)
+            spec.settings.desired = snap.autoscaling["desired"]
 
         if verdict.pool_wide and spec.mode == OBSERVE:
             conditions.append(("PoolWideDegradation", "every member is degraded at once; likely a shared cause"))
@@ -407,6 +421,10 @@ class Reconciler:
             for m in snap.members if m.owned and m.phase in (READY, WARMING, DRAINING)
         ]
         p = planner.plan(spec.settings, views, verdict, snap.history, now)
+        if p.need and not p.create and snap.history.last_create_rejected:
+            # Still short of pods, and RunPod refused the last create: say so
+            # while backing off, not just in the loop the create failed.
+            snap.conditions.append(_capacity_unavailable(spec, p.need, snap.history.last_create_rejected))
         # A slot still routing to a pool pod that RunPod no longer lists (e.g.
         # terminated by hand in the console) is unwired here; the planner then
         # sees the capacity gap next loop and creates a replacement. Slots to
@@ -528,14 +546,41 @@ class Reconciler:
                     image=created.image, cost_per_hr=created.cost_per_hr, created_at=now,
                     warming_since=now,
                 ))
+                snap.history.last_create_rejected = None
                 snap.executed.append((f"create {created.id} ({p.create['reason']})", True))
             except Exception as e:
                 log.warning("pool %s: create failed: %s", spec.name, e)
                 if _create_rejected(e):
                     snap.history.creates.remove(now)
+                    snap.history.last_create_rejected = str(e)[:300]
+                    snap.conditions.append(_capacity_unavailable(spec, p.need, snap.history.last_create_rejected))
                 snap.history.last_create_failure = now
                 snap.conditions.append(("CreateFailed", str(e)[:300]))
                 snap.executed.append(("create", False))
+
+    def _autoscale(self, spec, ready, prev, conditions, now):
+        """status.autoscaling for this loop: desired size plus the history behind it."""
+        s, a = spec.settings, spec.autoscaling
+        prev_desired = max(s.replicas_min, min(s.replicas_max, int(prev.get("desired") or s.replicas_min)))
+        scaler = Autoscaler.from_state(prev, a.up_window, a.down_window)
+        value = None
+        if self.prometheus is None:
+            conditions.append(("AutoscalingMetricUnavailable", "PROMETHEUS_URL is not set"))
+        else:
+            try:
+                value = self.prometheus.scalar(prom.render(a.query, spec.prometheus_job))
+                if value is None:
+                    conditions.append(("AutoscalingMetricUnavailable", "autoscaling.query returned no data"))
+            except Exception as e:
+                conditions.append(("AutoscalingMetricUnavailable", str(e)[:300]))
+        # Scale from the pods that carry the load now: reachable, not flagged.
+        serving = [m for m in ready if m.reachable is not False and not m.would_replace]
+        rec = recommend(len(serving), value, a.target, s.replicas_min, s.replicas_max)
+        desired = scaler.step(prev_desired, rec, now)
+        if desired != prev_desired:
+            log.info("pool %s: autoscaling %d -> %d (value %s, target %s)",
+                     spec.name, prev_desired, desired, value, a.target)
+        return {"desired": desired, "value": value, "recommendation": rec, **scaler.state()}
 
     # -------------------------------------------------------------- reading
 
@@ -690,10 +735,12 @@ class Reconciler:
                 "creates": snap.history.creates,
                 "replacements": snap.history.replacements,
                 "lastCreateFailure": snap.history.last_create_failure,
+                "lastCreateRejected": snap.history.last_create_rejected,
                 "lastUpdateFailure": snap.history.last_update_failure,
                 "retired": snap.history.retired,
             },
             "goneCandidates": snap.gone_candidates,
+            **({"autoscaling": snap.autoscaling} if snap.autoscaling is not None else {}),
             "lastReconcileTime": _iso(now),
         }
         if snap.last_warmup_seconds is not None:
@@ -709,6 +756,13 @@ def _load_history(status):
         creates=[float(t) for t in h.get("creates") or []],
         replacements=list(h.get("replacements") or []),
         last_create_failure=h.get("lastCreateFailure"),
+        last_create_rejected=h.get("lastCreateRejected"),
         last_update_failure=h.get("lastUpdateFailure"),
         retired=list(h.get("retired") or []),
     )
+
+
+def _capacity_unavailable(spec, need, error):
+    return ("CapacityUnavailable",
+            f"{need} more pod(s) wanted, but RunPod has no capacity for {', '.join(spec.gpu_types)} "
+            f"({spec.cloud}) in {', '.join(spec.settings.datacenters_allow) or 'any DC'}: {error}")

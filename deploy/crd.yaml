@@ -128,6 +128,25 @@ spec:
                     max:
                       type: integer
                       minimum: 1
+                autoscaling:
+                  description: Size the pool between replicas.min and replicas.max from one Prometheus query, like an HPA.
+                  type: object
+                  properties:
+                    enabled:
+                      description: Default false.
+                      type: boolean
+                    query:
+                      description: PromQL returning one value for the pool, compared with target per Ready pod; $job is replaced by prometheus.job.
+                      type: string
+                    target:
+                      description: Wanted value of the query per Ready pod. Default 1.
+                      type: number
+                    scaleUpStabilization:
+                      description: Scale up only when every recommendation in this window is higher. Default 2m.
+                      type: string
+                    scaleDownStabilization:
+                      description: Scale down to the highest recommendation in this window. Default 30m.
+                      type: string
                 nginx:
                   type: object
                   properties:
