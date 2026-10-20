@@ -45,6 +45,8 @@ jobs:
           grep -q '"inference-nginx-slots","other-pool-nginx-slots"' out/pools.yaml
           grep -q '\["inference-env"\]' out/pools.yaml
           grep -q 'apiVersion: runpodpool.ownego.com/v1alpha1' out/pools.yaml
+          grep -q 'name: pool-ctl$' out/pools.yaml
+          grep -q 'reloader.stakater.com/auto: "true"' out/pools.yaml
           grep -q 'kind: Secret' out/inline-key.yaml
           grep -q 'namespace: gpu' out/inline-key.yaml
       - name: Validate against Kubernetes schemas

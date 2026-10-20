@@ -69,7 +69,7 @@ kubectl -n runpod create secret generic runpod-pool-controller \
   --from-literal=RUNPOD_API_KEY=<key>
 
 helm install rpp oci://ghcr.io/ownego/charts/runpod-pool-controller \
-  -n runpod --version 0.1.0 \
+  -n runpod --version 0.1.1 \
   --set prometheusUrl=http://prometheus-operated.monitoring.svc:9090
 ```
 

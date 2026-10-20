@@ -1,4 +1,7 @@
 # Rendered by CI (helm lint / template): a pool with every optional part on.
+fullnameOverride: pool-ctl
+annotations:
+  reloader.stakater.com/auto: "true"
 prometheusUrl: http://prometheus-operated.monitoring.svc:9090
 serviceMonitor:
   enabled: true
