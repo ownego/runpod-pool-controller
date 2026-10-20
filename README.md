@@ -72,7 +72,7 @@ kubectl -n runpod create secret generic runpod-pool-controller \
   --from-literal=RUNPOD_API_KEY=<key>
 
 helm install rpp oci://ghcr.io/ownego/charts/runpod-pool-controller \
-  -n runpod --version 0.2.0 \
+  -n runpod --version 0.2.1 \
   --set prometheusUrl=http://prometheus-operated.monitoring.svc:9090
 ```
 
@@ -245,6 +245,7 @@ write them in the pool. Each must return one series per pod, labelled
 | `drain.period` | `150s` | |
 | `nginx.configMap`, `.slotsConfigMap`, `.service` | `<pool>-nginx-config`, `<pool>-nginx-slots`, `<pool>` | |
 | `nginx.basePort`, `.readTimeout` | `8081`, `120s` | |
+| `nginx.slotPorts` | `4` | slot ports nginx has, from `basePort` up; must cover `replicas.max` + 1 |
 | `envFromSecret` | none | every key goes to pods as env |
 | `metricsTokenKey` | none | key in that Secret for the metrics token |
 | `port` | `80` | the pods' HTTP port |

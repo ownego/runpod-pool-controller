@@ -308,6 +308,11 @@ class Reconciler:
                                 set(history.retired))
         if runpod_error:
             conditions.append(("RunPodApiUnavailable", runpod_error))
+        if spec.settings.replicas_max + 1 > spec.slot_ports:
+            # A surge replacement at replicas.max needs one slot more; past
+            # that, wiring a pod fails (SlotsUpdateFailed).
+            conditions.append(("SlotPortsTooFew", f"nginx.slotPorts={spec.slot_ports} is below "
+                                                  f"replicas.max + 1 = {spec.settings.replicas_max + 1}"))
 
         drift = sorted(pod for pod in slots.values() if pod not in {m.pod_id for m in members})
         if drift:

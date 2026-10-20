@@ -705,3 +705,13 @@ def test_no_stock_raises_capacity_unavailable_until_a_create_succeeds():
     run(rec, clock, 8)  # next try succeeds
     assert len(runpod.created) == 1
     assert "CapacityUnavailable" not in {c["type"] for c in kube.patched["remove-bg"]["conditions"]}
+
+
+def test_too_few_slot_ports_for_replicas_max_is_reported():
+    rec, kube, _, clock, _ = make(pools=[managed(replicas={"min": 2, "max": 5})])
+    run(rec, clock, 1)
+    assert "SlotPortsTooFew" in {c["type"] for c in kube.patched["remove-bg"]["conditions"]}
+    rec, kube, _, clock, _ = make(pools=[managed(replicas={"min": 2, "max": 5}, nginx={
+        "configMap": "remove-bg-nginx-config", "service": "remove-bg", "slotPorts": 6})])
+    run(rec, clock, 1)
+    assert "SlotPortsTooFew" not in {c["type"] for c in kube.patched["remove-bg"]["conditions"]}

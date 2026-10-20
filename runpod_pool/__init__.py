@@ -14,4 +14,4 @@ members onto it in place, one at a time. Observe (spec.paused) and DryRun
 See README.md.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
