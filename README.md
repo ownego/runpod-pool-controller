@@ -72,7 +72,7 @@ kubectl -n runpod create secret generic runpod-pool-controller \
   --from-literal=RUNPOD_API_KEY=<key>
 
 helm install rpp oci://ghcr.io/ownego/charts/runpod-pool-controller \
-  -n runpod --version 0.2.1 \
+  -n runpod --version 0.3.0 \
   --set prometheusUrl=http://prometheus-operated.monitoring.svc:9090
 ```
 
@@ -146,10 +146,12 @@ Each loop (30s by default):
    pod is unwired at once, since nginx is already skipping it, unless it is
    the last wired pod.
 4. **Capacity below the wanted size** (`replicas.min`, or the autoscaler's
-   size) triggers one create per loop. RunPod
-   is offered the allowed datacenters that have no pool pod yet, in
-   `datacenters.allow` order, and the `gpuTypes` in order, and takes the
-   first combination with stock.
+   size) triggers one create per loop. RunPod's REST API v2 takes one GPU
+   type per create, so the controller tries the `gpuTypes` in order, each
+   with the allowed datacenters that have no pool pod yet (preferred in
+   `datacenters.allow` order), until RunPod places one. Only a capacity
+   refusal (400) moves on to the next type; a timeout or 5xx stops the
+   attempt, since it may still have made a pod.
 5. **A slot pointing at a pool pod RunPod no longer lists** (for example,
    one terminated by hand) is unwired after two loops in a row, and step 4
    fills the gap.
@@ -157,12 +159,13 @@ Each loop (30s by default):
    `spec.image`, and the pool is otherwise idle and healthy with at least 2
    Ready pods, the oldest such pod is unwired, drained, then switched to the
    new image in place (`PATCH /pods/{id}`). RunPod resets the pod on the same
-   machine, so the pod keeps its GPU. The pod's current env is sent back with
-   the update, merged with `envFromSecret`, because RunPod's update defaults
-   `env` to empty. The pod is rewired once its process has restarted and
+   machine, so the pod keeps its GPU. The update carries `templateId` and
+   `envFromSecret`, so RunPod rebuilds the env exactly as on create: an env
+   in a v2 PATCH replaces the pod's whole env, and the env RunPod returns
+   can have secret values masked. The pod is rewired once its process has restarted and
    probes pass; then the next pod follows. The restart is read from the pod's
    own metrics (the earliest Prometheus `*_created` sample is the process
-   start time), because RunPod's `lastStartedAt` does not change on a reset.
+   start time), because RunPod's start time does not change on a reset.
 
 7. **Autoscaling** (`spec.autoscaling`, off by default). Each loop the
    pool's query gives one value, e.g. the average queue per pod. The
@@ -213,7 +216,7 @@ duration (`spec.health.replaceWhen`):
 | `SlowScrape` | metrics probe slower than 2s (10m) |
 | `RelativeLatency` | average request time above 4x the median of the other pods (10m); needs `prometheus.latencyQuery` |
 | `ErrorRate` | 5xx share above 5% (5m); needs `prometheus.errorRatioQuery` |
-| `HostNotice` | RunPod has a note or maintenance window on the pod's machine (`machine.note`, `maintenanceNote`, `maintenanceStart`). Only with `hostNotice: true`; otherwise it is reported as condition `HostNotice` |
+| `HostNotice` | RunPod has a note or maintenance window on the pod's machine. Only with `hostNotice: true`; otherwise it is reported as condition `HostNotice`. **Inactive since 0.6.0:** REST API v2 exposes no machine, so no notice is ever seen |
 
 The latency and error-rate queries come from your app's metrics, so you
 write them in the pool. Each must return one series per pod, labelled

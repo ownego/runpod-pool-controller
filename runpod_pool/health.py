@@ -34,6 +34,7 @@ class Rules:
     error_rate_for: float = 300
     # Replace a member whose RunPod host carries a notice (RunPodPod.host_notice).
     # Off by default until the notice field is confirmed to carry real alerts.
+    # No effect since REST API v2, which exposes no machine (host_notice None).
     host_notice: bool = False
 
 

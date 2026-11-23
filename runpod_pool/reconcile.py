@@ -214,7 +214,7 @@ class Member:
     updating: bool = False  # Draining for an in-place image update
     # Warming after an in-place update: when the update was sent. Probes
     # count only once the pod's process started after it, so the old
-    # container cannot be rewired. RunPod's lastStartedAt is no use here: a
+    # container cannot be rewired. RunPod's start time is no use here: a
     # reset leaves it unchanged (2026-10-20, p75k271va7u9x4).
     restart_from: float | None = None
     process_started: float | None = None  # from the probe's /metrics
@@ -520,7 +520,7 @@ class Reconciler:
             m.phase, m.draining_since, m.updating = WARMING, None, False
             m.warming_since, m.ok_probes = now, 0
             try:
-                self.runpod.update_pod_image(pod, image=spec.image, env=env,
+                self.runpod.update_pod_image(pod, template_id=spec.template_id, image=spec.image, env=env,
                                              name_prefix=spec.name_prefix, adopted=spec.adopt)
                 m.restart_from, m.updated_to = now, spec.image
                 snap.executed.append((f"update {pod} ({spec.image})", True))
@@ -617,7 +617,7 @@ class Reconciler:
         pod_slot = {pod: port for port, pod in slots.items()}
         members = []
         for p in sorted(runpod_pods.values(), key=lambda p: p.id):
-            if p.desired_status == "TERMINATED" or not is_owned(p.id, p.name, spec.name_prefix, spec.adopt):
+            if p.status == "TERMINATED" or not is_owned(p.id, p.name, spec.name_prefix, spec.adopt):
                 continue
             prev = prev_members.get(p.id) or {}
             created = prev.get("createdAtUnix") or _parse_iso(p.last_started_at) or now
@@ -625,7 +625,7 @@ class Reconciler:
                 pod_id=p.id, phase=WARMING, datacenter=p.datacenter, gpu=p.gpu, image=p.image,
                 cost_per_hr=p.cost_per_hr, created_at=float(created), host_notice=p.host_notice,
             )
-            if p.desired_status == "EXITED":
+            if p.status == "EXITED":
                 m.phase = "Exited"  # stopped by someone; reported, not managed
             elif p.id in pod_slot:
                 m.phase, m.slot_port = READY, pod_slot[p.id]

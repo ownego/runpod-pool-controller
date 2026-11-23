@@ -94,7 +94,7 @@ class FakeRunPod:
         self.pods[new.id] = new
         return new
 
-    def update_pod_image(self, pod_id, *, image, env, name_prefix, adopted):
+    def update_pod_image(self, pod_id, *, template_id, image, env, name_prefix, adopted):
         p = self.pods[pod_id]
         if not is_owned(pod_id, p.name, name_prefix, adopted):
             raise NotOwned(pod_id)

@@ -102,4 +102,5 @@ spec:
       errorRateFor: 5m
       # Replace a pod whose RunPod machine carries a note or maintenance
       # window, e.g. "We have detected a critical error on this machine".
+      # No effect since 0.6.0: RunPod's REST API v2 exposes no machine.
       hostNotice: true
