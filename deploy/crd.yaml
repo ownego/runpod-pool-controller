@@ -224,7 +224,7 @@ spec:
                         errorRateAbove: {type: number}
                         errorRateFor: {type: string}
                         hostNotice:
-                          description: Replace a member whose RunPod host has a note or maintenance window. Default false.
+                          description: Replace a member whose RunPod host has a note or maintenance window. Default false. No effect since 0.6.0 (RunPod REST API v2 exposes no machine).
                           type: boolean
             status:
               type: object
